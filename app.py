@@ -265,4 +265,49 @@ def compute_max_start_volume(exchange, cycle, low=0.1, high=1e6, tol=1e-3):
         vol = V
         for i in range(len(cycle)):
             from_asset = cycle[i]
-to_asset = cycle((i+1) % len(cycle))ob = exchange.get_orderbook(from_asset, to_asset)if ob is None or vol > ob.max_bid_volume: return Falsevol = vol * ob.p0_bid * (1 - ob.fee)if vol <= 0: return Falsereturn Truehi = highif not can_cycle(hi):while hi > low and not can_cycle(hi): hi /= 2if hi <= low: return lowlo = lowwhile hi - lo > tol:mid = (lo + hi) / 2if can_cycle(mid): lo = midelse: hi = midreturn lodef find_optimal_volume(exchange, cycle, low=1e-6, high=None, tol=1e-6):if high is None:high = compute_max_start_volume(exchange, cycle)if high <= low:return low, 0.0f = profit_function(exchange, cycle)res = minimize_scalar(lambda x: -f(x), bounds=(low, high), method='bounded', options={'xatol': tol})if res.success:return res.x, -res.funelse:best_v = lowbest_p = f(low)for v in np.linspace(low, high, 50):p = f(v)if p > best_p:best_p = pbest_v = vreturn best_v, best_p
+        to_asset = cycle((i + 1) % len(cycle))
+        ob = exchange.get_orderbook(from_asset, to_asset)
+        if ob is None or vol > ob.max_bid_volume:
+            return False
+        vol = vol * ob.p0_bid * (1 - ob.fee)
+        if vol <= 0:
+            return False
+    return True
+
+hi = high
+if not can_cycle(hi):
+    while hi > low and not can_cycle(hi):
+        hi /= 2
+    if hi <= low:
+        return low
+
+lo = low
+while hi - lo > tol:
+    mid = (lo + hi) / 2
+    if can_cycle(mid):
+        lo = mid
+    else:
+        hi = mid
+return lo
+
+def find_optimal_volume(exchange, cycle, low=1e-6, high=None, tol=1e-6):
+    if high is None:
+        high = compute_max_start_volume(exchange, cycle)
+    if high <= low:
+        return low, 0.0
+        
+    f = profit_function(exchange, cycle)
+    res = minimize_scalar(lambda x: -f(x), bounds=(low, high), method='bounded', options={'xatol': tol})
+    
+    if res.success:
+        return res.x, -res.fun
+    else:
+        best_v = low
+        best_p = f(low)
+        for v in np.linspace(low, high, 50):
+            p = f(v)
+            if p > best_p:
+                best_p = p
+                best_v = v
+        return best_v, best_p
+
