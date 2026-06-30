@@ -327,3 +327,54 @@ def find_optimal_volume(exchange, cycle, low=1e-6, high=None, tol=1e-6):
                 best_p = p
                 best_v = v
         return best_v, best_p
+# ---------- ИНТЕРФЕЙС STREAMLIT ----------
+st.title("Arbitrage Crypto Bot ⚡")
+
+# Загрузка ключей
+keys = load_api_keys()
+exchange_name = st.selectbox("Выберите биржу", EXCHANGES)
+api_key = st.text_input("API Key", value=keys.get(exchange_name, {}).get('api_key', ''), type="password")
+secret = st.text_input("Secret Key", value=keys.get(exchange_name, {}).get('secret', ''), type="password")
+
+if st.button("Сохранить ключи"):
+    keys[exchange_name] = {'api_key': api_key, 'secret': secret}
+    save_api_keys(keys)
+    st.success("Ключи сохранены")
+
+# Загрузка комиссий
+fees = load_fees()
+fee = fees.get(exchange_name, DEFAULT_FEES.get(exchange_name, 0.1)) / 100.0
+
+# Параметры поиска
+assets_input = st.text_input("Активы (через запятую)", "BTC, ETH, USDT")
+base_assets = [x.strip() for x in assets_input.split(',') if x.strip()]
+
+if st.button("Найти арбитражные циклы"):
+    if not api_key or not secret:
+        st.error("Введите API ключи")
+    else:
+        with st.spinner("Загрузка данных..."):
+            ex = RealExchange(exchange_name, api_key, secret, fee)
+            ex.load_markets()
+            ex.build_orderbooks(base_assets, base_assets)
+            
+            # Построение матрицы весов
+            n = len(base_assets)
+            weight = np.full((n, n), np.inf)
+            for i, base in enumerate(base_assets):
+                for j, quote in enumerate(base_assets):
+                    if i != j:
+                        rate = ex.get_rate(base, quote)
+                        if rate is not None and rate > 0:
+                            weight[i][j] = -math.log(rate)
+            
+            cycles = bellman_ford(weight, base_assets)
+            if cycles:
+                st.success(f"Найдено {len(cycles)} циклов:")
+                for cycle in cycles:
+                    st.write(" → ".join(cycle))
+                    # Рассчёт оптимального объёма
+                    opt_v, profit = find_optimal_volume(ex, cycle)
+                    st.write(f"  Оптимальный стартовый объём: {opt_v:.4f} {cycle[0]}, прибыль: {profit:.4f} {cycle[0]}")
+            else:
+                st.warning("Циклов не найдено")
