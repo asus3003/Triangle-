@@ -120,7 +120,7 @@ class RealExchange:
                         continue
                     asks = np.array(ob_data['asks'])
                     bids = np.array(ob_data['bids'])
-                    
+
                     p0_ask = asks[0, 0]
                     cum_vol_ask = np.cumsum(asks[:, 1])
                     if len(cum_vol_ask) > 1:
@@ -180,7 +180,8 @@ class RealExchange:
             try:
                 if i == 0:
                     log_callback(f"Шаг {i+1}: Покупаем {to_asset} за {from_asset} на сумму {volume:.4f} {from_asset}\n")
-                    order = self.exchange.create_market_buy_order(symbol, None, params={'cost': volume})
+                    # Используем create_order с параметром cost для универсальности
+                    order = self.exchange.create_order(symbol, 'market', 'buy', None, None, {'cost': volume})
                     filled = order['filled'] if order['filled'] else 0
                     if filled == 0 and order.get('cost') and order.get('price'):
                         filled = order['cost'] / order['price']
@@ -223,24 +224,31 @@ def bellman_ford(weight, assets, max_cycles=10):
         for v in range(n):
             if weight[u][v] < np.inf and dist[u] + weight[u][v] < dist[v] - 1e-12:
                 if v in visited_vertices: continue
+                # Восстановление цикла
                 cycle = []
                 cur = v
                 seen = {}
                 while cur not in seen:
+                    # Если parent[cur] == -1, цикл не найден – выходим
+                    if parent[cur] == -1:
+                        break
                     seen[cur] = len(cycle)
                     cycle.append(cur)
                     cur = parent[cur]
-                start_idx = seen[cur]
-                cycle = cycle[start_idx:]
-                if len(cycle) >= 2:
-                    cycle_names = [assets[i] for i in cycle]
-                    total_weight = sum(weight[cycle[i]][cycle[(i+1)%len(cycle)]] for i in range(len(cycle)))
-                    if total_weight < -1e-12:
-                        cycles.append(cycle_names)
-                    for node in cycle:
-                        visited_vertices.add(node)
-                    if len(cycles) >= max_cycles:
-                        return cycles
+                else:
+                    # Цикл найден
+                    if cur in seen:
+                        start_idx = seen[cur]
+                        cycle = cycle[start_idx:]
+                        if len(cycle) >= 2:
+                            cycle_names = [assets[i] for i in cycle]
+                            total_weight = sum(weight[cycle[i]][cycle[(i+1)%len(cycle)]] for i in range(len(cycle)))
+                            if total_weight < -1e-12:
+                                cycles.append(cycle_names)
+                                for node in cycle:
+                                    visited_vertices.add(node)
+                                if len(cycles) >= max_cycles:
+                                    return cycles
     return cycles
 
 def profit_for_cycle(exchange, cycle, start_volume):
@@ -249,14 +257,17 @@ def profit_for_cycle(exchange, cycle, start_volume):
         from_asset = cycle[i]
         to_asset = cycle[(i+1) % len(cycle)]
         ob = exchange.get_orderbook(from_asset, to_asset)
-        if ob is None: return 0.0
+        if ob is None:
+            return 0.0
         volume = ob.exchange(volume, 'sell')
-        if volume <= 0: return 0.0
+        if volume <= 0:
+            return 0.0
     return volume
 
 def profit_function(exchange, cycle):
     def f(V):
-        if V <= 0: return 0.0
+        if V <= 0:
+            return 0.0
         return profit_for_cycle(exchange, cycle, V) - V
     return f
 
@@ -265,40 +276,46 @@ def compute_max_start_volume(exchange, cycle, low=0.1, high=1e6, tol=1e-3):
         vol = V
         for i in range(len(cycle)):
             from_asset = cycle[i]
-        to_asset = cycle((i + 1) % len(cycle))
-        ob = exchange.get_orderbook(from_asset, to_asset)
-        if ob is None or vol > ob.max_bid_volume:
-            return False
-        vol = vol * ob.p0_bid * (1 - ob.fee)
-        if vol <= 0:
-            return False
-    return True
+            to_asset = cycle[(i+1) % len(cycle)]
+            ob = exchange.get_orderbook(from_asset, to_asset)
+            if ob is None:
+                return False
+            # Проверяем, что можем продать текущий объём
+            if vol > ob.max_bid_volume:
+                return False
+            # Рассчитываем получаемый объём после продажи с учётом комиссии
+            avg_price = ob.get_avg_price('bid', vol)
+            vol = vol * avg_price * (1 - ob.fee)
+            if vol <= 0:
+                return False
+        return True
 
-hi = high
-if not can_cycle(hi):
-    while hi > low and not can_cycle(hi):
-        hi /= 2
-    if hi <= low:
-        return low
+    # Бинарный поиск максимального начального объёма
+    hi = high
+    if not can_cycle(hi):
+        while hi > low and not can_cycle(hi):
+            hi /= 2
+        if hi <= low:
+            return low
 
-lo = low
-while hi - lo > tol:
-    mid = (lo + hi) / 2
-    if can_cycle(mid):
-        lo = mid
-    else:
-        hi = mid
-return lo
+    lo = low
+    while hi - lo > tol:
+        mid = (lo + hi) / 2
+        if can_cycle(mid):
+            lo = mid
+        else:
+            hi = mid
+    return lo
 
 def find_optimal_volume(exchange, cycle, low=1e-6, high=None, tol=1e-6):
     if high is None:
         high = compute_max_start_volume(exchange, cycle)
     if high <= low:
         return low, 0.0
-        
+
     f = profit_function(exchange, cycle)
     res = minimize_scalar(lambda x: -f(x), bounds=(low, high), method='bounded', options={'xatol': tol})
-    
+
     if res.success:
         return res.x, -res.fun
     else:
@@ -310,4 +327,3 @@ def find_optimal_volume(exchange, cycle, low=1e-6, high=None, tol=1e-6):
                 best_p = p
                 best_v = v
         return best_v, best_p
-
